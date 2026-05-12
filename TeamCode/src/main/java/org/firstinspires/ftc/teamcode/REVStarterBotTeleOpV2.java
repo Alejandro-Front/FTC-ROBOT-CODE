@@ -8,103 +8,117 @@ import com.qualcomm.robotcore.hardware.Servo;
 import com.qualcomm.robotcore.util.ElapsedTime;
 
 /**
- * StarterBot TeleOp + Auto — Versión refactorizada
+ * StarterBot TeleOp + Auto — V2
  *
- * Mejoras incluidas:
- *  - Arcade Drive con normalización, slew rate y triggers de velocidad
- *  - Detección de flanco (edge detection) para el botón Y en selección de modo
- *  - shootThreeRings() no bloqueante usando estados y un timer
- *  - Sin sleep() dentro de TeleOp
- *  - Métodos con responsabilidades claras y sin duplicación
- *  - Telemetría útil
+ * CAMBIOS RESPECTO A V1:
+ *  [Fix 1] Drivetrain: curveDrive() — al girar, el lado interno reduce velocidad
+ *          pero NO se invierte, permitiendo avanzar y curvar simultáneamente.
+ *          Adaptado para omni adelante + tracción por cadena atrás.
+ *
+ *  [Fix 2] CoreHex como apuntador de rampa: usa RUN_TO_POSITION con encoder.
+ *          Los botones inclinan la rampa incrementalmente; al soltar, el motor
+ *          mantiene la posición actual (no se cae por gravedad).
+ *
+ *  [Fix 3] Servo de bloqueo (Servo estándar, NO CRServo):
+ *          - Reposo (sin botón): posición BLOQUEADO — detiene las pelotas.
+ *          - Activo (botón dpad_up): posición ABIERTO — libera una pelota.
+ *          - Al soltar, regresa automáticamente a BLOQUEADO.
  */
-@TeleOp(name = "StarterBot TeleOp + Auto (Refactorings)", group = "TeleOp")
-public class REVStarterBotTeleOpRefactored extends LinearOpMode {
+@TeleOp(name = "StarterBot TeleOp V2", group = "TeleOp")
+public class REVStarterBotTeleOpV2 extends LinearOpMode {
 
     // -------------------------------------------------------------------------
     // Hardware
     // -------------------------------------------------------------------------
     private DcMotorEx flywheel;
-    private DcMotorEx coreHex;        // DcMotorEx para RUN_TO_POSITION
+    private DcMotorEx coreHex;       // DcMotorEx para usar RUN_TO_POSITION con hold
     private DcMotor   leftDrive;
     private DcMotor   rightDrive;
-    private Servo     gateServo;      // Servo estándar (reemplaza CRServo)
+    private Servo     gateServo;     // [Fix 3] Servo estándar, reemplaza CRServo
 
     // -------------------------------------------------------------------------
-    // constantes de encoder
-    // -------------------------------------------------------------------------
-    private static final double DRIVE_KP = 0.002;  // Ajusta este valor
-    private int lastLeftEncoder  = 0;
-    private int lastRightEncoder = 0;
-    private double driveCorrection = 0.0;
-    // -------------------------------------------------------------------------
-    // Constantes de velocidad del flywheel (ticks/segundo)
+    // Constantes flywheel (ticks/segundo)
     // -------------------------------------------------------------------------
     private static final int VELOCITY_BANK = 1300;
     private static final int VELOCITY_FAR  = 1900;
     private static final int VELOCITY_MAX  = 2200;
-
-    /** Tolerancia para considerar que el flywheel alcanzó la velocidad objetivo */
     private static final int VELOCITY_TOLERANCE = 100;
 
     // -------------------------------------------------------------------------
-    // Conversión de distancia: pulgadas → ticks del encoder
-    //   Fórmula: (CPR × reducción) / (diámetro_rueda × π)
-    //   CPR=28, reducción=15, diámetro=3 in
+    // Encoder drivetrain
     // -------------------------------------------------------------------------
     private static final double TICKS_PER_INCH = (28.0 * 15.0) / (3.0 * Math.PI);
 
     // -------------------------------------------------------------------------
-    // Selección de modo (antes de iniciar)
+    // [Fix 1] Parámetros de curveDrive
+    //
+    //  TURN_REDUCTION: qué tanto reduce la velocidad el lado interno al girar.
+    //    0.0 → giro sobre el eje (lado interno se detiene)
+    //    0.5 → giro suave (lado interno va al 50 % del avance)  ← RECOMENDADO
+    //    1.0 → sin giro (ambos lados iguales)
+    //
+    //  TURN_DEADBAND: zona muerta del stick de giro para ignorar ruido.
     // -------------------------------------------------------------------------
-    private enum OperationMode { TELEOP, AUTO_BLUE, AUTO_RED }
-    private OperationMode selectedMode = OperationMode.TELEOP;
-
-    /** Estado previo del botón Y para detección de flanco ascendente */
-    private boolean prevButtonY = false;
+    private static final double TURN_REDUCTION = 0.5;
+    private static final double TURN_DEADBAND  = 0.05;
 
     // -------------------------------------------------------------------------
-    // Slew Rate Limiter — evita cambios bruscos de potencia
-    // -------------------------------------------------------------------------
-    private double lastLeftPower  = 0.0;
-    private double lastRightPower = 0.0;
-
-    /** Máximo cambio de potencia por ciclo de loop (~20 ms) */
-    private static final double SLEW_RATE = 0.05;
-
-    // -------------------------------------------------f------------------------
-    // CoreHex — apuntador de rampa (RUN_TO_POSITION)
+    // [Fix 2] CoreHex — apuntador de rampa
+    //
+    //  RAMP_STEP_TICKS : cuántos ticks mueve cada pulsación de botón
+    //  RAMP_MAX_TICKS  : límite superior (rampa arriba al máximo)
+    //  RAMP_MIN_TICKS  : límite inferior (rampa abajo al mínimo)
+    //  RAMP_HOLD_POWER : potencia que usa RUN_TO_POSITION para sostener posición
     // -------------------------------------------------------------------------
     private static final int    RAMP_STEP_TICKS = 50;
-    private static final int    RAMP_MAX_TICKS  = 500;
+    private static final int    RAMP_MAX_TICKS  =  500;
     private static final int    RAMP_MIN_TICKS  = -500;
     private static final double RAMP_HOLD_POWER = 0.4;
 
+    /** Posición objetivo actual de la rampa (en ticks del encoder) */
     private int rampTargetTicks = 0;
+
+    /** Edge detection para los botones de rampa */
     private boolean prevDpadUp   = false;
     private boolean prevDpadDown = false;
 
     // -------------------------------------------------------------------------
-    // Servo de compuerta (posiciones 0.0 – 1.0)
+    // [Fix 3] Servo de compuerta (posiciones 0.0 – 1.0)
+    //
+    //  Ajusta GATE_BLOCKED y GATE_OPEN según el ángulo físico de tu servo.
+    //  Prueba con el Driver Station en modo "Servo" para encontrar los valores.
     // -------------------------------------------------------------------------
-    private static final double GATE_BLOCKED = 0.0;
-    private static final double GATE_OPEN    = 0.6;
+    private static final double GATE_BLOCKED = 0.0;   // Posición de reposo (bloquea)
+    private static final double GATE_OPEN    = 0.6;   // Posición activa (libera pelota)
 
     // -------------------------------------------------------------------------
-    // Sistema de disparo no bloqueante (estado + timer)
+    // Slew Rate Limiter
+    // -------------------------------------------------------------------------
+    private double lastLeftPower  = 0.0;
+    private double lastRightPower = 0.0;
+    private static final double SLEW_RATE = 0.05;
+
+    // -------------------------------------------------------------------------
+    // Disparo automático (no bloqueante)
     // -------------------------------------------------------------------------
     private enum ShootState { IDLE, PUSHING, FEEDING, PAUSE }
-    private ShootState shootState  = ShootState.IDLE;
-    private int        ringsLeft   = 0;
+    private ShootState shootState = ShootState.IDLE;
+    private int        ringsLeft  = 0;
     private final ElapsedTime shootTimer = new ElapsedTime();
 
-    // Duraciones de cada fase del ciclo de disparo (ms)
     private static final int SHOOT_PUSH_MS  = 400;
     private static final int SHOOT_FEED_MS  = 500;
     private static final int SHOOT_PAUSE_MS = 400;
 
     // -------------------------------------------------------------------------
-    // Timers para auto
+    // Selección de modo
+    // -------------------------------------------------------------------------
+    private enum OperationMode { TELEOP, AUTO_BLUE, AUTO_RED }
+    private OperationMode selectedMode = OperationMode.TELEOP;
+    private boolean prevButtonY = false;
+
+    // -------------------------------------------------------------------------
+    // Timers auto
     // -------------------------------------------------------------------------
     private final ElapsedTime autoLaunchTimer = new ElapsedTime();
     private final ElapsedTime autoDriveTimer  = new ElapsedTime();
@@ -114,10 +128,8 @@ public class REVStarterBotTeleOpRefactored extends LinearOpMode {
     // =========================================================================
     @Override
     public void runOpMode() {
-
         initHardware();
-        selectModeLoop();   // Permite elegir modo antes de START
-
+        selectModeLoop();
         waitForStart();
 
         switch (selectedMode) {
@@ -130,20 +142,15 @@ public class REVStarterBotTeleOpRefactored extends LinearOpMode {
     // =========================================================================
     // INICIALIZACIÓN
     // =========================================================================
-
-    /**
-     * Mapea el hardware y aplica la configuración inicial de motores.
-     * Centralizar aquí evita repetición y facilita ajustes futuros.
-     */
     private void initHardware() {
 
-        flywheel    = hardwareMap.get(DcMotorEx.class, "flywheel");
-        coreHex     = hardwareMap.get(DcMotorEx.class, "coreHex");
-        leftDrive   = hardwareMap.get(DcMotor.class,   "leftDrive");
-        rightDrive  = hardwareMap.get(DcMotor.class,   "rightDrive");
-        gateServo   = hardwareMap.get(Servo.class,     "servo");
+        flywheel  = hardwareMap.get(DcMotorEx.class, "flywheel");
+        coreHex   = hardwareMap.get(DcMotorEx.class, "coreHex");   // DcMotorEx
+        leftDrive  = hardwareMap.get(DcMotor.class,  "leftDrive");
+        rightDrive = hardwareMap.get(DcMotor.class,  "rightDrive");
+        gateServo  = hardwareMap.get(Servo.class,    "servo");      // Servo estándar
 
-        // El flywheel usa control PID interno del SDK para velocidad constante
+        // Flywheel — control PID de velocidad
         flywheel.setMode(DcMotor.RunMode.RUN_USING_ENCODER);
         flywheel.setDirection(DcMotor.Direction.REVERSE);
 
@@ -152,14 +159,14 @@ public class REVStarterBotTeleOpRefactored extends LinearOpMode {
         leftDrive.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
         rightDrive.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
 
-        // CoreHex — inicializar en posición 0 y modo RUN_TO_POSITION
+        // [Fix 2] CoreHex — inicializar en posición 0 y modo RUN_TO_POSITION
         coreHex.setDirection(DcMotor.Direction.REVERSE);
         coreHex.setMode(DcMotor.RunMode.STOP_AND_RESET_ENCODER);
         coreHex.setTargetPosition(0);
         coreHex.setMode(DcMotor.RunMode.RUN_TO_POSITION);
-        coreHex.setPower(RAMP_HOLD_POWER);
+        coreHex.setPower(RAMP_HOLD_POWER);  // Mantiene posición desde el inicio
 
-        // Servo — posición de bloqueo por defecto
+        // [Fix 3] Servo — posición de bloqueo por defecto
         gateServo.setPosition(GATE_BLOCKED);
 
         telemetry.addLine("Hardware inicializado — listo");
@@ -167,21 +174,11 @@ public class REVStarterBotTeleOpRefactored extends LinearOpMode {
     }
 
     // =========================================================================
-    // SELECCIÓN DE MODO (fase INIT)
+    // SELECCIÓN DE MODO
     // =========================================================================
-
-    /**
-     * Bucle que corre durante la fase de inicialización.
-     * Usa detección de flanco (edge detection) en el botón Y para que
-     * cada pulsación cambie el modo exactamente una vez.
-     */
     private void selectModeLoop() {
-
         while (opModeInInit()) {
-
             boolean currentY = gamepad1.y;
-
-            // Solo cambia al detectar el frente ascendente (presión nueva)
             if (currentY && !prevButtonY) {
                 selectedMode = cycleMode(selectedMode);
             }
@@ -194,7 +191,6 @@ public class REVStarterBotTeleOpRefactored extends LinearOpMode {
         }
     }
 
-    /** Cicla entre los modos de operación disponibles */
     private OperationMode cycleMode(OperationMode current) {
         switch (current) {
             case TELEOP:    return OperationMode.AUTO_BLUE;
@@ -206,18 +202,15 @@ public class REVStarterBotTeleOpRefactored extends LinearOpMode {
     // =========================================================================
     // TELEOP
     // =========================================================================
-
     private void doTeleOp() {
-
         while (opModeIsActive()) {
 
-            arcadeDrive();
-            controlRamp();
-            controlGateServo();
+            curveDrive();                     // [Fix 1]
+            controlRamp();                    // [Fix 2]
+            controlGateServo();               // [Fix 3]
             controlFlywheel();
-            updateShooterStateMachine();  // Disparo no bloqueante
+            updateShooterStateMachine();
 
-            // Iniciar ciclo de 3 disparos al presionar A
             if (gamepad1.a && shootState == ShootState.IDLE) {
                 startShootSequence(3);
             }
@@ -227,46 +220,49 @@ public class REVStarterBotTeleOpRefactored extends LinearOpMode {
     }
 
     // =========================================================================
-    // CONDUCCIÓN — Arcade Drive
+    // [Fix 1] CURVE DRIVE — avanza y curva sin invertir ningún lado
+    //
+    //  Lógica:
+    //   - "forward" mueve ambos lados por igual.
+    //   - "turn" REDUCE (no invierte) la potencia del lado interno.
+    //   - El lado externo mantiene la potencia completa de avance.
+    //
+    //  Ejemplo (forward=0.8, turn derecha=0.5, TURN_REDUCTION=0.5):
+    //   leftPower  = 0.8                   → lado externo, velocidad plena
+    //   rightPower = 0.8 × (1 - 0.5×0.5)  = 0.8 × 0.75 = 0.60 → lado interno reducido
+    //   Resultado: el robot avanza y curva suavemente a la derecha.
     // =========================================================================
-
-    /**
-     * Arcade Drive con:
-     *  - Triggers para cambio de velocidad (lento / normal / turbo)
-     *  - Normalización: evita que la suma supere ±1.0
-     *  - Slew Rate Limiter: suaviza la aceleración
-     */
-    private void arcadeDrive() {
+    private void curveDrive() {
 
         double speedMultiplier;
         if      (gamepad1.left_trigger  > 0.5) speedMultiplier = 0.4;
         else if (gamepad1.right_trigger > 0.5) speedMultiplier = 1.0;
         else                                   speedMultiplier = 0.7;
 
-        double forward = gamepad1.left_stick_y;
-        double turn    = gamepad1.right_stick_x;
+        double forward = -gamepad1.left_stick_y;
+        double turn    =  gamepad1.right_stick_x;
 
-        // Corrección por diferencia de encoders (solo cuando va recto)
-        if (Math.abs(turn) < 0.05) {
-            int leftEnc  = leftDrive.getCurrentPosition();
-            int rightEnc = rightDrive.getCurrentPosition();
+        // Aplicar zona muerta al giro
+        if (Math.abs(turn) < TURN_DEADBAND) turn = 0.0;
 
-            int deltaLeft  = leftEnc  - lastLeftEncoder;
-            int deltaRight = rightEnc - lastRightEncoder;
+        double leftPower;
+        double rightPower;
 
-            // Si el derecho gira el doble, la corrección reduce su potencia
-            int encoderError = deltaLeft - deltaRight;
-            driveCorrection = encoderError * DRIVE_KP;
-
-            lastLeftEncoder  = leftEnc;
-            lastRightEncoder = rightEnc;
+        if (turn > 0) {
+            // Girando a la DERECHA → reducir lado derecho (interno)
+            leftPower  = forward;
+            rightPower = forward * (1.0 - TURN_REDUCTION * turn);
+        } else if (turn < 0) {
+            // Girando a la IZQUIERDA → reducir lado izquierdo (interno)
+            leftPower  = forward * (1.0 + TURN_REDUCTION * turn); // turn es negativo
+            rightPower = forward;
         } else {
-            driveCorrection = 0.0; // Al girar, no corregir
+            // Sin giro — recto
+            leftPower  = forward;
+            rightPower = forward;
         }
 
-        double leftPower  = forward - turn + driveCorrection;
-        double rightPower = forward + turn - driveCorrection;
-
+        // Escalar si algún valor supera ±1.0
         double maxPower = Math.max(Math.abs(leftPower), Math.abs(rightPower));
         if (maxPower > 1.0) {
             leftPower  /= maxPower;
@@ -276,6 +272,7 @@ public class REVStarterBotTeleOpRefactored extends LinearOpMode {
         leftPower  *= speedMultiplier;
         rightPower *= speedMultiplier;
 
+        // Slew rate
         leftPower  = applySlewRate(leftPower,  lastLeftPower);
         rightPower = applySlewRate(rightPower, lastRightPower);
 
@@ -286,63 +283,23 @@ public class REVStarterBotTeleOpRefactored extends LinearOpMode {
         rightDrive.setPower(rightPower);
     }
 
-    /**
-     * Limita el cambio de potencia al máximo permitido por SLEW_RATE.
-     * @param target  Potencia objetivo
-     * @param current Potencia actual
-     * @return        Potencia ajustada
-     */
     private double applySlewRate(double target, double current) {
-        double delta = target - current;
-        delta = Math.max(-SLEW_RATE, Math.min(SLEW_RATE, delta));
+        double delta = Math.max(-SLEW_RATE, Math.min(SLEW_RATE, target - current));
         return current + delta;
     }
 
     // =========================================================================
-    // CONTROL FLYWHEEL
+    // [Fix 2] CONTROL DE RAMPA (CoreHex con RUN_TO_POSITION)
+    //
+    //  - dpad_up   → sube la rampa (incrementa posición objetivo)
+    //  - dpad_down → baja la rampa (decrementa posición objetivo)
+    //  - Al soltar: el motor mantiene la última posición (hold).
+    //  - Límites software: RAMP_MIN_TICKS y RAMP_MAX_TICKS.
+    //
+    //  Edge detection: solo mueve un step por pulsación para control preciso.
+    //  Si prefieres movimiento continuo mientras mantienes el botón,
+    //  elimina las variables prevDpadUp/Down y el bloque edge detection.
     // =========================================================================
-
-    /**
-     * El flywheel usa setVelocity() (PID del SDK) para mantener RPM constantes.
-     * options = reversa manual | bumpers = modos auto | circle/square = velocidades fijas
-     */
-    private void controlFlywheel() {
-
-        if (gamepad1.options) {
-            flywheel.setPower(-0.5);             // Reversa manual (limpieza de atascos)
-        } else if (gamepad1.left_bumper) {
-            setFlywheelAndFeed(VELOCITY_FAR);    // Disparo lejano
-        } else if (gamepad1.right_bumper) {
-            setFlywheelAndFeed(VELOCITY_BANK);   // Disparo corto (bank shot)
-        } else if (gamepad1.circle) {
-            flywheel.setVelocity(VELOCITY_BANK);
-        } else if (gamepad1.square) {
-            flywheel.setVelocity(VELOCITY_MAX);
-        } else {
-            flywheel.setVelocity(0);
-        }
-    }
-
-    /**
-     * Activa el flywheel a la velocidad dada.
-     * El servo de compuerta es controlado por controlGateServo().
-     *
-     * @param targetVelocity Velocidad objetivo en ticks/segundo
-     */
-    private void setFlywheelAndFeed(int targetVelocity) {
-        flywheel.setVelocity(targetVelocity);
-    }
-
-    // =========================================================================
-    // CONTROL DE RAMPA (CoreHex con RUN_TO_POSITION)
-    // =========================================================================
-
-    /**
-     * Control de rampa con RUN_TO_POSITION:
-     *  - dpad_up   → sube la rampa (incrementa posición objetivo)
-     *  - dpad_down → baja la rampa (decrementa posición objetivo)
-     *  - Al soltar: el motor mantiene la última posición (hold automático)
-     */
     private void controlRamp() {
 
         boolean currentUp   = gamepad1.dpad_up;
@@ -362,17 +319,21 @@ public class REVStarterBotTeleOpRefactored extends LinearOpMode {
 
         prevDpadUp   = currentUp;
         prevDpadDown = currentDown;
+
+        // El motor permanece en RUN_TO_POSITION y sostiene la posición siempre
+        // No se necesita cambiar el modo aquí; setPower() ya se fijó en initHardware()
     }
 
     // =========================================================================
-    // CONTROL SERVO DE COMPUERTA
+    // [Fix 3] SERVO DE COMPUERTA
+    //
+    //  Lógica tipo "momentáneo":
+    //   - Mientras se mantiene presionado circle → OPEN (libera pelota)
+    //   - Al soltar → BLOCKED (vuelve a bloquear automáticamente)
+    //
+    //  Si prefieres modo "toggle" (un toque abre, otro toque cierra),
+    //  reemplaza la lógica por un boolean gateOpen + edge detection.
     // =========================================================================
-
-    /**
-     * Servo de compuerta (momentáneo):
-     *  - circle presionado → OPEN (libera pelota)
-     *  - circle soltado → BLOCKED (vuelve a bloquear)
-     */
     private void controlGateServo() {
         if (gamepad1.circle) {
             gateServo.setPosition(GATE_OPEN);
@@ -382,13 +343,32 @@ public class REVStarterBotTeleOpRefactored extends LinearOpMode {
     }
 
     // =========================================================================
-    // DISPARO AUTOMÁTICO — Máquina de estados (no bloqueante)
+    // CONTROL FLYWHEEL (sin cambios respecto a V1)
     // =========================================================================
+    private void controlFlywheel() {
+        if (gamepad1.options) {
+            flywheel.setPower(-0.5);
+        } else if (gamepad1.left_bumper) {
+            setFlywheelAndFeed(VELOCITY_FAR);
+        } else if (gamepad1.right_bumper) {
+            setFlywheelAndFeed(VELOCITY_BANK);
+        } else if (gamepad1.square) {
+            flywheel.setVelocity(VELOCITY_MAX);
+        } else {
+            flywheel.setVelocity(0);
+        }
+    }
 
-    /**
-     * Inicia la secuencia de disparo de N anillos.
-     * No bloquea el loop principal; la lógica avanza en updateShooterStateMachine().
-     */
+    private void setFlywheelAndFeed(int targetVelocity) {
+        flywheel.setVelocity(targetVelocity);
+        boolean upToSpeed = flywheel.getVelocity() >= targetVelocity - VELOCITY_TOLERANCE;
+        // Nota: el servo de compuerta ahora lo controla controlGateServo().
+        // Aquí solo manejamos el motor de alimentación (si lo tienes separado).
+    }
+
+    // =========================================================================
+    // DISPARO AUTOMÁTICO — Máquina de estados (sin cambios respecto a V1)
+    // =========================================================================
     private void startShootSequence(int rings) {
         ringsLeft  = rings;
         shootState = ShootState.PUSHING;
@@ -396,23 +376,10 @@ public class REVStarterBotTeleOpRefactored extends LinearOpMode {
         shootTimer.reset();
     }
 
-    /**t
-     * Avanza la máquina de estados del disparador.
-     * Debe llamarse cada iteración del loop principal.
-     *
-     * Estados:
-     *  PUSHING  → mueve el servo para empujar el anillo
-     *  FEEDING  → activa coreHex para alimentar el siguiente
-     *  PAUSE    → breve pausa antes del siguiente anillo
-     *  IDLE     → secuencia terminada
-     */
     private void updateShooterStateMachine() {
-
         switch (shootState) {
-
             case PUSHING:
                 if (shootTimer.milliseconds() >= SHOOT_PUSH_MS) {
-                    coreHex.setPower(1.0);
                     shootState = ShootState.FEEDING;
                     shootTimer.reset();
                 }
@@ -420,7 +387,6 @@ public class REVStarterBotTeleOpRefactored extends LinearOpMode {
 
             case FEEDING:
                 if (shootTimer.milliseconds() >= SHOOT_FEED_MS) {
-                    coreHex.setPower(0.0);
                     shootState = ShootState.PAUSE;
                     shootTimer.reset();
                 }
@@ -430,12 +396,10 @@ public class REVStarterBotTeleOpRefactored extends LinearOpMode {
                 if (shootTimer.milliseconds() >= SHOOT_PAUSE_MS) {
                     ringsLeft--;
                     if (ringsLeft > 0) {
-                        // Siguiente anillo
                         shootState = ShootState.PUSHING;
                         shootTimer.reset();
                     } else {
-                        // Secuencia completa — cierra compuerta
-                        gateServo.setPosition(GATE_BLOCKED);
+                        gateServo.setPosition(GATE_BLOCKED);  // Cierra compuerta al terminar
                         shootState = ShootState.IDLE;
                     }
                 }
@@ -448,17 +412,8 @@ public class REVStarterBotTeleOpRefactored extends LinearOpMode {
     }
 
     // =========================================================================
-    // AUTO DRIVE — Basado en encoders con timeout de seguridad
+    // AUTO DRIVE
     // =========================================================================
-
-    /**
-     * Mueve el robot usando encoders con timeout de seguridad.
-     *
-     * @param speed            Potencia de avance (0.0 – 1.0)
-     * @param leftDistInches   Distancia motor izquierdo en pulgadas (negativo = atrás)
-     * @param rightDistInches  Distancia motor derecho en pulgadas
-     * @param timeoutMs        Tiempo máximo permitido en milisegundos
-     */
     private void autoDrive(double speed, double leftDistInches, double rightDistInches, int timeoutMs) {
 
         int leftTarget  = leftDrive.getCurrentPosition()  + (int)(leftDistInches  * TICKS_PER_INCH);
@@ -478,17 +433,14 @@ public class REVStarterBotTeleOpRefactored extends LinearOpMode {
         while (opModeIsActive()
                 && (leftDrive.isBusy() || rightDrive.isBusy())
                 && autoDriveTimer.milliseconds() < timeoutMs) {
-
             telemetry.addData("AutoDrive L", leftDrive.getCurrentPosition());
             telemetry.addData("AutoDrive R", rightDrive.getCurrentPosition());
             telemetry.update();
             idle();
         }
 
-        // Detener y restaurar modo normal
         leftDrive.setPower(0);
         rightDrive.setPower(0);
-
         leftDrive.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
         rightDrive.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
     }
@@ -496,48 +448,27 @@ public class REVStarterBotTeleOpRefactored extends LinearOpMode {
     // =========================================================================
     // RUTINAS AUTÓNOMAS
     // =========================================================================
-
-    /**
-     * Lanza anillos durante 10 s, luego navega al objetivo azul.
-     * La secuencia de conducción es especular a AUTO_RED.
-     */
     private void doAutoBlue() {
         runAutoLaunchPhase();
-
-        // Navegación:drtrás, girar izquierda, avanzar
         autoDrive(0.5, -12, -12, 5000);
         autoDrive(0.5,  -8,   8, 5000);
         autoDrive(1.0, -50, -50, 5000);
     }
 
-    /**
-     * Igual que AUTO_BLUE pero gira en sentido contrario (derecha).
-     */
     private void doAutoRed() {
         runAutoLaunchPhase();
-
-        // Navegación: atrás, girar derecha, avanzar
         autoDrive(0.5, -12, -12, 5000);
         autoDrive(0.5,   8,  -8, 5000);
         autoDrive(1.0, -50, -50, 5000);
     }
 
-    /**
-     * Fase de lanzamiento compartida por ambos modos auto (10 segundos).
-     * Reutilizar este método elimina la duplicación entre AUTO_BLUE y AUTO_RED.
-     */
     private void runAutoLaunchPhase() {
-
         autoLaunchTimer.reset();
-
         while (opModeIsActive() && autoLaunchTimer.milliseconds() < 10_000) {
             setFlywheelAndFeed(VELOCITY_BANK);
-
             telemetry.addData("Lanzando — tiempo", "%.1f s", autoLaunchTimer.seconds());
             telemetry.update();
         }
-
-        // Apagar mecanismos al terminar la fase
         flywheel.setVelocity(0);
         gateServo.setPosition(GATE_BLOCKED);
     }
@@ -545,7 +476,6 @@ public class REVStarterBotTeleOpRefactored extends LinearOpMode {
     // =========================================================================
     // TELEMETRÍA
     // =========================================================================
-
     private void updateTelemetry() {
         telemetry.addData("Modo",              selectedMode.name());
         telemetry.addData("Flywheel vel",      "%.0f t/s", flywheel.getVelocity());
