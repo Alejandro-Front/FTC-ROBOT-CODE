@@ -1,7 +1,8 @@
-package org.firstinspires.ftc.teamcode;
+package org.firstinspires.ftc.teamcode.legacy;
 
 import com.qualcomm.hardware.rev.RevHubOrientationOnRobot;
 import com.qualcomm.robotcore.eventloop.opmode.Autonomous;
+import com.qualcomm.robotcore.eventloop.opmode.Disabled;
 import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
 import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
@@ -20,6 +21,7 @@ import org.firstinspires.ftc.robotcore.external.navigation.AngleUnit;
  *  5. Apaga CoreHex
  */
 @Autonomous(name = "Auto ROJA", group = "Autonomous")
+@Disabled
 public class AutoAlianzaRoja extends LinearOpMode {
 
     private DcMotor     leftDrive;
@@ -68,8 +70,6 @@ public class AutoAlianzaRoja extends LinearOpMode {
         coreHex.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
         coreHex.setPower(0);
 
-        // ✅ Configuración para Hub en lado DERECHO con logo hacia ABAJO
-// Hub en lado DERECHO, logo hacia ABAJO, puertos USB hacia afuera (DERECHA)
         RevHubOrientationOnRobot orientation = new RevHubOrientationOnRobot(
                 RevHubOrientationOnRobot.LogoFacingDirection.DOWN,
                 RevHubOrientationOnRobot.UsbFacingDirection.RIGHT);

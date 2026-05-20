@@ -1,5 +1,6 @@
-package org.firstinspires.ftc.teamcode;
+package org.firstinspires.ftc.teamcode.legacy;
 
+import com.qualcomm.robotcore.eventloop.opmode.Disabled;
 import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 import com.qualcomm.robotcore.hardware.CRServo;
@@ -35,6 +36,7 @@ import com.qualcomm.robotcore.hardware.DcMotorEx;
  *   SERVO_RUN           → dirección del servo (0.7 normal, 0.3 si gira al revés)
  */
 @TeleOp(name = "v4", group = "TeleOp")
+@Disabled
 public class revV4 extends LinearOpMode {
 
     // -------------------------------------------------------------------------

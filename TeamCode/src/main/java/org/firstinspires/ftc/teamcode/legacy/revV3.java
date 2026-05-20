@@ -1,5 +1,6 @@
-package org.firstinspires.ftc.teamcode;
+package org.firstinspires.ftc.teamcode.legacy;
 
+import com.qualcomm.robotcore.eventloop.opmode.Disabled;
 import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 import com.qualcomm.robotcore.hardware.DcMotor;
@@ -20,6 +21,7 @@ import com.qualcomm.robotcore.util.ElapsedTime;
  *  7. VELOCITY_TOLERANCE eliminado (no aplica sin DcMotorEx)
  */
 @TeleOp(name = "v3", group = "TeleOp")
+@Disabled
 public class revV3 extends LinearOpMode {
 
     // -------------------------------------------------------------------------

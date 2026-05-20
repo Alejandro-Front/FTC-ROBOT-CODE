@@ -1,8 +1,8 @@
-package org.firstinspires.ftc.teamcode;
+package org.firstinspires.ftc.teamcode.legacy;
 
 import com.qualcomm.robotcore.eventloop.opmode.Autonomous;
+import com.qualcomm.robotcore.eventloop.opmode.Disabled;
 import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
-import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
 import com.qualcomm.robotcore.hardware.Servo;
@@ -46,6 +46,7 @@ import com.qualcomm.robotcore.hardware.Servo;
  *   Si gira al revés, cambiar SERVO_RUN a 0.3
  */
 @Autonomous(name = "Auto")
+@Disabled
 public class autonomo extends LinearOpMode {
 
     // -------------------------------------------------------------------------

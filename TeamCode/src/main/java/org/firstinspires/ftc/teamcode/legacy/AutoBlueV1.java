@@ -1,6 +1,7 @@
-package org.firstinspires.ftc.teamcode;
+package org.firstinspires.ftc.teamcode.legacy;
 
 import com.qualcomm.robotcore.eventloop.opmode.Autonomous;
+import com.qualcomm.robotcore.eventloop.opmode.Disabled;
 import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
 import com.qualcomm.robotcore.hardware.CRServo;
 import com.qualcomm.robotcore.hardware.DcMotor;
@@ -33,6 +34,7 @@ import java.util.List;
  * ─────────────────────────────────────────────────────────────────────────────
  */
 @Autonomous(name = "AutoAzul", group = "Autonomous")
+@Disabled
 public class AutoBlueV1 extends LinearOpMode {
 
     // =========================================================================
